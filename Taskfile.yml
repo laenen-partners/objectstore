@@ -1,0 +1,68 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list-all
+
+  generate:
+    desc: Generate protobuf and connect-go code
+    cmds:
+      - buf generate
+
+  generate:sqlc:
+    desc: Generate sqlc code for Postgres token store
+    dir: tokenstore/postgres
+    cmds:
+      - sqlc generate
+
+  lint:
+    desc: Lint protobuf definitions
+    cmds:
+      - buf lint
+
+  build:
+    desc: Build the objs server binary
+    cmds:
+      - go build -o bin/objs ./cmd/objs
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v -count=1 ./...
+
+  test:e2e:
+    desc: Run only e2e tests
+    cmds:
+      - go test -v -count=1 -run 'TestE2E_' ./...
+
+  test:postgres:
+    desc: Run Postgres integration tests (reads OBJECT_STORE_POSTGRES_URL from .env)
+    dir: tokenstore/postgres
+    cmds:
+      - go test -v -count=1 ./...
+
+  run:
+    desc: Run the server locally
+    cmds:
+      - go run ./cmd/objs
+
+  live:
+    desc: Run the server with live reload (requires air)
+    cmds:
+      - air -c .air.toml -- || go run ./cmd/objs
+
+  clean:
+    desc: Remove build artifacts and local data
+    cmds:
+      - rm -rf bin/
+      - rm -rf .data/
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+      - cd tokenstore/postgres && go mod tidy
