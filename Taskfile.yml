@@ -21,6 +21,11 @@ tasks:
     cmds:
       - sqlc generate
 
+  generate:apikey:
+    desc: Generate a cryptographically random API key
+    cmds:
+      - openssl rand -hex 32
+
   lint:
     desc: Lint protobuf definitions
     cmds:
