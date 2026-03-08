@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"time"
 
@@ -175,8 +176,9 @@ func (v *Validator) Validate(ctx context.Context, method, bucket, key string, _ 
 		if row.Used {
 			return nil, tokenstore.ErrTokenInvalid
 		}
-		if err := v.queries.MarkUsed(ctx, token); err != nil {
-			return nil, fmt.Errorf("postgres: mark used: %w", err)
+		// Atomic consume: only one concurrent request can succeed.
+		if _, err := v.queries.ConsumeOneTimeToken(ctx, token); err != nil {
+			return nil, tokenstore.ErrTokenInvalid
 		}
 	}
 
@@ -208,6 +210,28 @@ func (v *Validator) FindByTags(ctx context.Context, tags map[string]string) ([]p
 		return nil, fmt.Errorf("postgres: marshal tags: %w", err)
 	}
 	return v.queries.FindByTags(ctx, tagsJSON)
+}
+
+// StartCleanup runs a background goroutine that periodically deletes expired tokens.
+// The goroutine stops when ctx is cancelled.
+func (v *Validator) StartCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n, err := v.queries.DeleteExpiredTokens(ctx)
+				if err != nil {
+					slog.Error("token cleanup failed", "error", err)
+				} else if n > 0 {
+					slog.Info("cleaned up expired tokens", "count", n)
+				}
+			}
+		}
+	}()
 }
 
 func runMigrations(databaseURL, migrationsTable string) error {

@@ -1,5 +1,7 @@
 version: "3"
 
+# Environment is loaded via mise (see mise.toml).
+# Fallback: dotenv for environments without mise.
 dotenv: [".env"]
 
 tasks:
@@ -33,6 +35,18 @@ tasks:
     desc: Run all tests
     cmds:
       - go test -v -count=1 ./...
+
+  test:cover:
+    desc: Run tests with coverage summary
+    cmds:
+      - go test -coverprofile=coverage.out -count=1 ./...
+
+  test:cover:html:
+    desc: Generate HTML coverage report and open in browser
+    cmds:
+      - go test -coverprofile=coverage.out -count=1 ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - open coverage.html
 
   test:e2e:
     desc: Run only e2e tests

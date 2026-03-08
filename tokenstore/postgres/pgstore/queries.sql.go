@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteExpiredTokens = `-- name: DeleteExpiredTokens :execrows
+DELETE FROM objectstore_tokens
+WHERE expires_at < NOW() - interval '7 days'
+`
+
+func (q *Queries) DeleteExpiredTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const checkSignatureExists = `-- name: CheckSignatureExists :one
 SELECT EXISTS(
     SELECT 1 FROM objectstore_tokens
@@ -119,15 +132,18 @@ func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) error 
 	return err
 }
 
-const markUsed = `-- name: MarkUsed :exec
+const consumeOneTimeToken = `-- name: ConsumeOneTimeToken :one
 UPDATE objectstore_tokens
 SET used = TRUE, used_at = NOW()
-WHERE token = $1
+WHERE token = $1 AND used = FALSE
+RETURNING id
 `
 
-func (q *Queries) MarkUsed(ctx context.Context, token string) error {
-	_, err := q.db.Exec(ctx, markUsed, token)
-	return err
+func (q *Queries) ConsumeOneTimeToken(ctx context.Context, token string) (int64, error) {
+	row := q.db.QueryRow(ctx, consumeOneTimeToken, token)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const revokeByTags = `-- name: RevokeByTags :execrows

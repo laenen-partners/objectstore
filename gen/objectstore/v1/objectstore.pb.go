@@ -171,6 +171,7 @@ type PresignGetRequest struct {
 	Bucket         string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`
 	Key            string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
 	ExpiresSeconds int32                  `protobuf:"varint,3,opt,name=expires_seconds,json=expiresSeconds,proto3" json:"expires_seconds,omitempty"` // default 900
+	Filename       string                 `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`                                    // Content-Disposition attachment filename
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -224,6 +225,13 @@ func (x *PresignGetRequest) GetExpiresSeconds() int32 {
 		return x.ExpiresSeconds
 	}
 	return 0
+}
+
+func (x *PresignGetRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
 }
 
 type PresignGetResponse struct {
@@ -490,6 +498,8 @@ type ListByPrefixRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Bucket        string                 `protobuf:"bytes,1,opt,name=bucket,proto3" json:"bucket,omitempty"`
 	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	PageSize      int32                  `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	PageToken     string                 `protobuf:"bytes,4,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -538,9 +548,24 @@ func (x *ListByPrefixRequest) GetPrefix() string {
 	return ""
 }
 
+func (x *ListByPrefixRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListByPrefixRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type ListByPrefixResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Keys          []string               `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -580,6 +605,13 @@ func (x *ListByPrefixResponse) GetKeys() []string {
 		return x.Keys
 	}
 	return nil
+}
+
+func (x *ListByPrefixResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
 }
 
 type EnsureBucketRequest struct {
@@ -677,11 +709,12 @@ const file_objectstore_v1_objectstore_proto_rawDesc = "" +
 	"\tsignature\x18\a \x01(\tR\tsignature\x12\x14\n" +
 	"\x05scope\x18\b \x01(\tR\x05scope\"&\n" +
 	"\x12PresignPutResponse\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\"f\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\"\x82\x01\n" +
 	"\x11PresignGetRequest\x12\x16\n" +
 	"\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12'\n" +
-	"\x0fexpires_seconds\x18\x03 \x01(\x05R\x0eexpiresSeconds\"&\n" +
+	"\x0fexpires_seconds\x18\x03 \x01(\x05R\x0eexpiresSeconds\x12\x1a\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\"&\n" +
 	"\x12PresignGetResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\"=\n" +
 	"\x11HeadObjectRequest\x12\x16\n" +
@@ -696,12 +729,16 @@ const file_objectstore_v1_objectstore_proto_rawDesc = "" +
 	"\x13DeleteObjectRequest\x12\x16\n" +
 	"\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\"\x16\n" +
-	"\x14DeleteObjectResponse\"E\n" +
+	"\x14DeleteObjectResponse\"\x81\x01\n" +
 	"\x13ListByPrefixRequest\x12\x16\n" +
 	"\x06bucket\x18\x01 \x01(\tR\x06bucket\x12\x16\n" +
-	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"*\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x04 \x01(\tR\tpageToken\"R\n" +
 	"\x14ListByPrefixResponse\x12\x12\n" +
-	"\x04keys\x18\x01 \x03(\tR\x04keys\"-\n" +
+	"\x04keys\x18\x01 \x03(\tR\x04keys\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"-\n" +
 	"\x13EnsureBucketRequest\x12\x16\n" +
 	"\x06bucket\x18\x01 \x01(\tR\x06bucket\"\x16\n" +
 	"\x14EnsureBucketResponse2\xa4\x04\n" +

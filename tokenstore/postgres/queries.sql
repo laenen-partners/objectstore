@@ -7,10 +7,11 @@ SELECT id, token, method, bucket, key, expires_at, one_time, used, revoked, max_
 FROM objectstore_tokens
 WHERE token = $1;
 
--- name: MarkUsed :exec
+-- name: ConsumeOneTimeToken :one
 UPDATE objectstore_tokens
 SET used = TRUE, used_at = NOW()
-WHERE token = $1;
+WHERE token = $1 AND used = FALSE
+RETURNING id;
 
 -- name: RevokeToken :exec
 UPDATE objectstore_tokens
@@ -28,6 +29,10 @@ SELECT id, token, method, bucket, key, expires_at, one_time, used, revoked, tags
 FROM objectstore_tokens
 WHERE tags @> @tags::jsonb
 ORDER BY created_at DESC;
+
+-- name: DeleteExpiredTokens :execrows
+DELETE FROM objectstore_tokens
+WHERE expires_at < NOW() - interval '7 days';
 
 -- name: CheckSignatureExists :one
 SELECT EXISTS(

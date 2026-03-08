@@ -32,6 +32,7 @@ message PresignGetRequest {
   string bucket = 1;
   string key = 2;
   int32 expires_seconds = 3; // default 900
+  string filename = 4; // Content-Disposition attachment filename
 }
 
 message PresignGetResponse {
@@ -61,10 +62,13 @@ message DeleteObjectResponse {}
 message ListByPrefixRequest {
   string bucket = 1;
   string prefix = 2;
+  int32 page_size = 3;
+  string page_token = 4;
 }
 
 message ListByPrefixResponse {
   repeated string keys = 1;
+  string next_page_token = 2;
 }
 
 message EnsureBucketRequest {

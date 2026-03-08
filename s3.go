@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
+	"log/slog"
+	"net/url"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // S3Store implements Store using AWS S3 (or S3-compatible services like MinIO).
@@ -77,6 +80,12 @@ func (s *S3Store) DeleteObject(ctx context.Context, bucket, key string) error {
 }
 
 func (s *S3Store) PresignPut(ctx context.Context, params PresignPutParams) (string, error) {
+	if params.MaxSize > 0 || len(params.AllowedTypes) > 0 {
+		slog.Warn("S3 presigned PUT does not enforce MaxSize or AllowedTypes server-side",
+			"bucket", params.Bucket, "key", params.Key,
+			"max_size", params.MaxSize, "allowed_types", params.AllowedTypes)
+	}
+
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(params.Bucket),
 		Key:    aws.String(params.Key),
@@ -84,6 +93,19 @@ func (s *S3Store) PresignPut(ctx context.Context, params PresignPutParams) (stri
 	if params.ContentType != "" {
 		input.ContentType = aws.String(params.ContentType)
 	}
+
+	// Pass tags as S3 object tagging.
+	if len(params.Tags) > 0 {
+		var tagSet []types.Tag
+		for k, v := range params.Tags {
+			tagSet = append(tagSet, types.Tag{
+				Key:   aws.String(k),
+				Value: aws.String(v),
+			})
+		}
+		input.Tagging = aws.String(tagsToQueryString(tagSet))
+	}
+
 	out, err := s.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(params.Expires))
 	if err != nil {
 		return "", fmt.Errorf("presign put: %w", err)
@@ -91,18 +113,55 @@ func (s *S3Store) PresignPut(ctx context.Context, params PresignPutParams) (stri
 	return out.URL, nil
 }
 
-func (s *S3Store) PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error) {
-	out, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(expires))
+func (s *S3Store) PresignGet(ctx context.Context, params PresignGetParams) (string, error) {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(params.Bucket),
+		Key:    aws.String(params.Key),
+	}
+	if params.Filename != "" {
+		input.ResponseContentDisposition = aws.String(
+			fmt.Sprintf(`attachment; filename="%s"`, params.Filename),
+		)
+	}
+
+	out, err := s.presignClient.PresignGetObject(ctx, input, s3.WithPresignExpires(params.Expires))
 	if err != nil {
 		return "", fmt.Errorf("presign get: %w", err)
 	}
 	return out.URL, nil
 }
 
-func (s *S3Store) ListByPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {
+func (s *S3Store) ListByPrefix(ctx context.Context, bucket, prefix string, pageSize int, pageToken string) (*ListResult, error) {
+	if pageSize <= 0 {
+		return s.listAllByPrefix(ctx, bucket, prefix)
+	}
+
+	input := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(int32(pageSize)),
+	}
+	if pageToken != "" {
+		input.ContinuationToken = aws.String(pageToken)
+	}
+
+	out, err := s.client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ListResult{}
+	for _, obj := range out.Contents {
+		result.Keys = append(result.Keys, aws.ToString(obj.Key))
+	}
+	if out.NextContinuationToken != nil {
+		result.NextPageToken = *out.NextContinuationToken
+	}
+	return result, nil
+}
+
+// listAllByPrefix returns all keys matching the prefix (unpaginated, backward-compatible).
+func (s *S3Store) listAllByPrefix(ctx context.Context, bucket, prefix string) (*ListResult, error) {
 	var keys []string
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -117,7 +176,7 @@ func (s *S3Store) ListByPrefix(ctx context.Context, bucket, prefix string) ([]st
 			keys = append(keys, aws.ToString(obj.Key))
 		}
 	}
-	return keys, nil
+	return &ListResult{Keys: keys}, nil
 }
 
 func (s *S3Store) EnsureBucket(ctx context.Context, bucket string) error {
@@ -131,4 +190,13 @@ func (s *S3Store) EnsureBucket(ctx context.Context, bucket string) error {
 		Bucket: aws.String(bucket),
 	})
 	return err
+}
+
+// tagsToQueryString converts S3 tags to URL query string format for the Tagging header.
+func tagsToQueryString(tags []types.Tag) string {
+	var parts []string
+	for _, t := range tags {
+		parts = append(parts, url.QueryEscape(aws.ToString(t.Key))+"="+url.QueryEscape(aws.ToString(t.Value)))
+	}
+	return strings.Join(parts, "&")
 }

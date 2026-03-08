@@ -16,25 +16,43 @@ const defaultExpireSeconds = 900
 // Handler implements the connect-go ObjectStoreServiceHandler.
 type Handler struct {
 	objectstorev1connect.UnimplementedObjectStoreServiceHandler
-	store Store
+	store      Store
+	maxExpires time.Duration
 }
 
 // NewHandler creates a connect-go RPC handler backed by the given Store.
-func NewHandler(store Store) *Handler {
-	return &Handler{store: store}
+// maxExpires caps the maximum presigned URL lifetime (0 = no cap).
+func NewHandler(store Store, maxExpires time.Duration) *Handler {
+	return &Handler{store: store, maxExpires: maxExpires}
 }
 
 func (h *Handler) PresignPut(ctx context.Context, req *connect.Request[objectstorev1.PresignPutRequest]) (*connect.Response[objectstorev1.PresignPutResponse], error) {
-	url, err := h.store.PresignPut(ctx, PresignPutParams{
+	params := PresignPutParams{
 		Bucket:       req.Msg.Bucket,
 		Key:          req.Msg.Key,
 		ContentType:  req.Msg.ContentType,
-		Expires:      expiresDuration(req.Msg.ExpiresSeconds),
+		Expires:      h.capExpires(expiresDuration(req.Msg.ExpiresSeconds)),
 		MaxSize:      req.Msg.MaxSize,
 		AllowedTypes: req.Msg.AllowedTypes,
 		Signature:    req.Msg.Signature,
 		Scope:        req.Msg.Scope,
-	})
+	}
+
+	// Auto-inject caller identity into token tags for audit traceability.
+	caller := CallerFromContext(ctx)
+	if caller.UserID != "" || caller.ServiceID != "" {
+		if params.Tags == nil {
+			params.Tags = make(map[string]string)
+		}
+		if caller.UserID != "" {
+			params.Tags["_user_id"] = caller.UserID
+		}
+		if caller.ServiceID != "" {
+			params.Tags["_service_id"] = caller.ServiceID
+		}
+	}
+
+	url, err := h.store.PresignPut(ctx, params)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -42,8 +60,12 @@ func (h *Handler) PresignPut(ctx context.Context, req *connect.Request[objectsto
 }
 
 func (h *Handler) PresignGet(ctx context.Context, req *connect.Request[objectstorev1.PresignGetRequest]) (*connect.Response[objectstorev1.PresignGetResponse], error) {
-	expires := expiresDuration(req.Msg.ExpiresSeconds)
-	url, err := h.store.PresignGet(ctx, req.Msg.Bucket, req.Msg.Key, expires)
+	url, err := h.store.PresignGet(ctx, PresignGetParams{
+		Bucket:   req.Msg.Bucket,
+		Key:      req.Msg.Key,
+		Expires:  h.capExpires(expiresDuration(req.Msg.ExpiresSeconds)),
+		Filename: req.Msg.Filename,
+	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -72,11 +94,14 @@ func (h *Handler) DeleteObject(ctx context.Context, req *connect.Request[objects
 }
 
 func (h *Handler) ListByPrefix(ctx context.Context, req *connect.Request[objectstorev1.ListByPrefixRequest]) (*connect.Response[objectstorev1.ListByPrefixResponse], error) {
-	keys, err := h.store.ListByPrefix(ctx, req.Msg.Bucket, req.Msg.Prefix)
+	result, err := h.store.ListByPrefix(ctx, req.Msg.Bucket, req.Msg.Prefix, int(req.Msg.PageSize), req.Msg.PageToken)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	return connect.NewResponse(&objectstorev1.ListByPrefixResponse{Keys: keys}), nil
+	return connect.NewResponse(&objectstorev1.ListByPrefixResponse{
+		Keys:          result.Keys,
+		NextPageToken: result.NextPageToken,
+	}), nil
 }
 
 func (h *Handler) EnsureBucket(ctx context.Context, req *connect.Request[objectstorev1.EnsureBucketRequest]) (*connect.Response[objectstorev1.EnsureBucketResponse], error) {
@@ -84,6 +109,14 @@ func (h *Handler) EnsureBucket(ctx context.Context, req *connect.Request[objects
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&objectstorev1.EnsureBucketResponse{}), nil
+}
+
+// capExpires enforces the maximum presigned URL lifetime.
+func (h *Handler) capExpires(d time.Duration) time.Duration {
+	if h.maxExpires > 0 && d > h.maxExpires {
+		return h.maxExpires
+	}
+	return d
 }
 
 func expiresDuration(seconds int32) time.Duration {

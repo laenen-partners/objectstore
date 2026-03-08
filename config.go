@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -21,6 +24,11 @@ type Config struct {
 	PostgresURL    string                    // Postgres connection string
 	S3Region       string                    // s3: AWS region
 	S3Endpoint     string                    // s3: custom endpoint (MinIO)
+	APIKeys        []string                  // API keys for RPC authentication
+	RateLimit      float64                   // requests per second per IP (0 = disabled)
+	RateBurst      int                       // burst allowance per IP
+	CORSOrigins    []string                  // allowed CORS origins (empty = no CORS)
+	MaxExpires     time.Duration             // max presigned URL lifetime (0 = no cap)
 }
 
 // ConfigFromEnv reads configuration from environment variables.
@@ -50,6 +58,45 @@ func ConfigFromEnv() Config {
 	if baseURL == "" {
 		baseURL = "http://localhost:3000"
 	}
+	var apiKeys []string
+	if keys := os.Getenv("API_KEYS"); keys != "" {
+		for _, k := range strings.Split(keys, ",") {
+			if trimmed := strings.TrimSpace(k); trimmed != "" {
+				apiKeys = append(apiKeys, trimmed)
+			}
+		}
+	}
+
+	rateLimit := 10.0
+	if v := os.Getenv("RATE_LIMIT"); v != "" {
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			rateLimit = parsed
+		}
+	}
+
+	rateBurst := 20
+	if v := os.Getenv("RATE_BURST"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			rateBurst = parsed
+		}
+	}
+
+	var corsOrigins []string
+	if v := os.Getenv("CORS_ORIGINS"); v != "" {
+		for _, o := range strings.Split(v, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				corsOrigins = append(corsOrigins, trimmed)
+			}
+		}
+	}
+
+	var maxExpires time.Duration
+	if v := os.Getenv("MAX_EXPIRES_SECONDS"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			maxExpires = time.Duration(secs) * time.Second
+		}
+	}
+
 	return Config{
 		Backend:     backend,
 		BasePath:    basePath,
@@ -57,6 +104,11 @@ func ConfigFromEnv() Config {
 		PostgresURL: os.Getenv("OBJECT_STORE_POSTGRES_URL"),
 		S3Region:    os.Getenv("S3_REGION"),
 		S3Endpoint:  os.Getenv("S3_ENDPOINT"),
+		APIKeys:     apiKeys,
+		RateLimit:   rateLimit,
+		RateBurst:   rateBurst,
+		CORSOrigins: corsOrigins,
+		MaxExpires:  maxExpires,
 	}
 }
 

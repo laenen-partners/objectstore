@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/laenen-partners/objectstore"
 	pgvalidator "github.com/laenen-partners/objectstore/tokenstore/postgres"
@@ -41,9 +44,34 @@ func main() {
 		addr = ":3000"
 	}
 
-	slog.Info("objectstore server starting", "addr", addr, "backend", cfg.Backend)
-	if err := http.ListenAndServe(addr, handler); err != nil {
-		slog.Error("server stopped", "error", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Start background token cleanup (every hour, removes tokens expired > 7 days ago).
+	v.StartCleanup(ctx, 1*time.Hour)
+
+	go func() {
+		slog.Info("objectstore server starting", "addr", addr, "backend", cfg.Backend)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-ctx.Done()
+	slog.Info("shutting down gracefully")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("shutdown error", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("server stopped")
 }

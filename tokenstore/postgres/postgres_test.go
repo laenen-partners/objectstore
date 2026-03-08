@@ -52,7 +52,7 @@ func TestIssueAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := v.Validate(ctx, "GET", "bucket", "file.txt", tok.ExpiresAt, tok.Token); err != nil {
+	if _, err := v.Validate(ctx, "GET", "bucket", "file.txt", tok.ExpiresAt, tok.Token); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestValidate_WrongMethod(t *testing.T) {
 		Method: "GET", Bucket: "b", Key: "k", Expires: 5 * time.Minute,
 	})
 
-	err := v.Validate(ctx, "PUT", "b", "k", tok.ExpiresAt, tok.Token)
+	_, err := v.Validate(ctx, "PUT", "b", "k", tok.ExpiresAt, tok.Token)
 	if !errors.Is(err, tokenstore.ErrTokenInvalid) {
 		t.Fatalf("got %v, want ErrTokenInvalid", err)
 	}
@@ -79,7 +79,7 @@ func TestValidate_Expired(t *testing.T) {
 		Method: "GET", Bucket: "b", Key: "k", Expires: -1 * time.Second,
 	})
 
-	err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
+	_, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
 	if !errors.Is(err, tokenstore.ErrTokenExpired) {
 		t.Fatalf("got %v, want ErrTokenExpired", err)
 	}
@@ -97,7 +97,7 @@ func TestRevoke(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
+	_, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
 	if !errors.Is(err, tokenstore.ErrTokenRevoked) {
 		t.Fatalf("got %v, want ErrTokenRevoked", err)
 	}
@@ -112,12 +112,12 @@ func TestOneTimeToken(t *testing.T) {
 	})
 
 	// First use succeeds.
-	if err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token); err != nil {
+	if _, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token); err != nil {
 		t.Fatalf("first Validate: %v", err)
 	}
 
 	// Second use fails.
-	err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
+	_, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
 	if !errors.Is(err, tokenstore.ErrTokenInvalid) {
 		t.Fatalf("second Validate: got %v, want ErrTokenInvalid", err)
 	}

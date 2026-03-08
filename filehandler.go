@@ -1,6 +1,7 @@
 package objectstore
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -84,6 +85,11 @@ func serveGet(w http.ResponseWriter, r *http.Request, store Store, bucket, key s
 	meta, err := store.HeadObject(r.Context(), bucket, key)
 	if err == nil && meta.ContentType != "" {
 		w.Header().Set("Content-Type", meta.ContentType)
+	}
+
+	// Set Content-Disposition if filename is specified in the presigned URL.
+	if filename := r.URL.Query().Get("filename"); filename != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	}
 
 	if r.Method == http.MethodHead {

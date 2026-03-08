@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: objectstore
+          POSTGRES_PASSWORD: objectstore
+          POSTGRES_DB: objectstore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U objectstore"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Buf lint
+        run: buf lint
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        env:
+          OBJECT_STORE_POSTGRES_URL: postgres://objectstore:objectstore@localhost:5432/objectstore?sslmode=disable
+        run: go test -coverprofile=coverage.out -count=1 ./...
+
+      - name: Test postgres module
+        env:
+          OBJECT_STORE_POSTGRES_URL: postgres://objectstore:objectstore@localhost:5432/objectstore?sslmode=disable
+        run: cd tokenstore/postgres && go test -v -count=1 ./...

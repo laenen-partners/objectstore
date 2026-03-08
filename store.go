@@ -23,10 +23,25 @@ type PresignPutParams struct {
 	Key          string
 	ContentType  string
 	Expires      time.Duration
-	MaxSize      int64    // 0 = server default
-	AllowedTypes []string // nil = any type allowed
-	Signature    string   // SHA-256 content hash; empty = no uniqueness check
-	Scope        string   // uniqueness boundary; empty = global
+	MaxSize      int64             // 0 = server default
+	AllowedTypes []string          // nil = any type allowed
+	Signature    string            // SHA-256 content hash; empty = no uniqueness check
+	Scope        string            // uniqueness boundary; empty = global
+	Tags         map[string]string // arbitrary key-value tags for token search/audit
+}
+
+// PresignGetParams holds parameters for generating a presigned GET URL.
+type PresignGetParams struct {
+	Bucket   string
+	Key      string
+	Expires  time.Duration
+	Filename string // Content-Disposition attachment filename; empty = none
+}
+
+// ListResult holds paginated results from ListByPrefix.
+type ListResult struct {
+	Keys          []string
+	NextPageToken string
 }
 
 // Store is the interface that object store backends must implement.
@@ -50,10 +65,12 @@ type Store interface {
 
 	// PresignGet returns a URL that allows an unauthenticated HTTP GET
 	// to download an object directly from the store.
-	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+	PresignGet(ctx context.Context, params PresignGetParams) (string, error)
 
 	// ListByPrefix returns object keys matching the given prefix.
-	ListByPrefix(ctx context.Context, bucket, prefix string) ([]string, error)
+	// When pageSize <= 0, all matching keys are returned.
+	// When pageSize > 0, at most pageSize keys are returned with a NextPageToken for continuation.
+	ListByPrefix(ctx context.Context, bucket, prefix string, pageSize int, pageToken string) (*ListResult, error)
 
 	// EnsureBucket creates the bucket if it does not already exist.
 	EnsureBucket(ctx context.Context, bucket string) error
