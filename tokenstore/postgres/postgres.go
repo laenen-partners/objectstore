@@ -127,6 +127,11 @@ func (v *Validator) Issue(ctx context.Context, req tokenstore.IssueRequest) (*to
 		tags = []byte("{}")
 	}
 
+	allowedTypes := req.AllowedTypes
+	if allowedTypes == nil {
+		allowedTypes = []string{}
+	}
+
 	err = v.queries.InsertToken(ctx, pgstore.InsertTokenParams{
 		Token:  tokenStr,
 		Method: req.Method,
@@ -139,7 +144,7 @@ func (v *Validator) Issue(ctx context.Context, req tokenstore.IssueRequest) (*to
 		OneTime:      req.OneTime,
 		Tags:         tags,
 		MaxSize:      req.MaxSize,
-		AllowedTypes: req.AllowedTypes,
+		AllowedTypes: allowedTypes,
 		Signature:    req.Signature,
 		Scope:        req.Scope,
 	})
