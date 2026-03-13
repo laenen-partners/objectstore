@@ -1,7 +1,5 @@
 version: "3"
 
-# Environment is loaded via mise (see mise.toml).
-# Fallback: dotenv for environments without mise.
 dotenv: [".env"]
 
 tasks:
@@ -10,31 +8,11 @@ tasks:
     cmds:
       - task --list-all
 
-  generate:
-    desc: Generate protobuf and connect-go code
-    cmds:
-      - buf generate
-
   generate:sqlc:
     desc: Generate sqlc code for Postgres token store
     dir: tokenstore/postgres
     cmds:
       - sqlc generate
-
-  generate:apikey:
-    desc: Generate a cryptographically random API key
-    cmds:
-      - openssl rand -hex 32
-
-  lint:
-    desc: Lint protobuf definitions
-    cmds:
-      - buf lint
-
-  build:
-    desc: Build the objs server binary
-    cmds:
-      - go build -o bin/objs ./cmd/objs
 
   test:
     desc: Run all tests
@@ -53,26 +31,10 @@ tasks:
       - go tool cover -html=coverage.out -o coverage.html
       - open coverage.html
 
-  test:e2e:
-    desc: Run only e2e tests
-    cmds:
-      - go test -v -count=1 -run 'TestE2E_' ./...
-
   test:postgres:
-    desc: Run Postgres integration tests (reads OBJECT_STORE_POSTGRES_URL from .env)
-    dir: tokenstore/postgres
+    desc: Run Postgres integration tests (uses testcontainers)
     cmds:
-      - go test -v -count=1 ./...
-
-  run:
-    desc: Run the server locally
-    cmds:
-      - go run ./cmd/objs
-
-  live:
-    desc: Run the server with live reload (requires air)
-    cmds:
-      - air -c .air.toml -- || go run ./cmd/objs
+      - go test -v -count=1 ./tokenstore/postgres/...
 
   clean:
     desc: Remove build artifacts and local data
@@ -84,4 +46,3 @@ tasks:
     desc: Tidy go modules
     cmds:
       - go mod tidy
-      - cd tokenstore/postgres && go mod tidy

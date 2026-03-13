@@ -233,6 +233,12 @@ func (s *LocalStore) EnsureBucket(_ context.Context, bucket string) error {
 	return os.MkdirAll(path, 0o755)
 }
 
+// IsLocal returns true if the Store is a *LocalStore.
+func IsLocal(s Store) bool {
+	_, ok := s.(*LocalStore)
+	return ok
+}
+
 // ParseFilePath extracts bucket and key from a URL path like /files/{bucket}/{key...}.
 func ParseFilePath(urlPath string) (bucket, key string, ok bool) {
 	p := strings.TrimPrefix(urlPath, "/files/")

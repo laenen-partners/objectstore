@@ -9,37 +9,66 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	objectstore "github.com/laenen-partners/objectstore"
 	"github.com/laenen-partners/objectstore/tokenstore"
 	pgvalidator "github.com/laenen-partners/objectstore/tokenstore/postgres"
 )
 
-func testURL(t *testing.T) string {
-	t.Helper()
-	u := os.Getenv("OBJECT_STORE_POSTGRES_URL")
-	if u == "" {
-		t.Skip("OBJECT_STORE_POSTGRES_URL not set")
-	}
-	return u
-}
-
-func newValidator(t *testing.T) *pgvalidator.Validator {
+// setupPostgres starts a Postgres testcontainer and returns the connection string.
+func setupPostgres(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	v, err := pgvalidator.New(ctx, testURL(t), pgvalidator.WithMigrations())
+
+	pgContainer, err := tcpostgres.Run(ctx,
+		"postgres:17",
+		tcpostgres.WithDatabase("objectstore_test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second),
+		),
+	)
+	if err != nil {
+		t.Fatalf("start postgres container: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := pgContainer.Terminate(ctx); err != nil {
+			t.Logf("terminate postgres container: %v", err)
+		}
+	})
+
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("get connection string: %v", err)
+	}
+
+	return connStr
+}
+
+func newValidator(t *testing.T) (*pgvalidator.Validator, string) {
+	t.Helper()
+	connStr := setupPostgres(t)
+	ctx := context.Background()
+	v, err := pgvalidator.New(ctx, connStr, pgvalidator.WithMigrations())
 	if err != nil {
 		t.Fatalf("postgres.New: %v", err)
 	}
 	t.Cleanup(v.Close)
-	return v
+	return v, connStr
 }
 
 func TestIssueAndValidate(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tok, err := v.Issue(ctx, tokenstore.IssueRequest{
@@ -58,7 +87,7 @@ func TestIssueAndValidate(t *testing.T) {
 }
 
 func TestValidate_WrongMethod(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tok, _ := v.Issue(ctx, tokenstore.IssueRequest{
@@ -72,7 +101,7 @@ func TestValidate_WrongMethod(t *testing.T) {
 }
 
 func TestValidate_Expired(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tok, _ := v.Issue(ctx, tokenstore.IssueRequest{
@@ -86,7 +115,7 @@ func TestValidate_Expired(t *testing.T) {
 }
 
 func TestRevoke(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tok, _ := v.Issue(ctx, tokenstore.IssueRequest{
@@ -104,19 +133,17 @@ func TestRevoke(t *testing.T) {
 }
 
 func TestOneTimeToken(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tok, _ := v.Issue(ctx, tokenstore.IssueRequest{
 		Method: "GET", Bucket: "b", Key: "k", Expires: 5 * time.Minute, OneTime: true,
 	})
 
-	// First use succeeds.
 	if _, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token); err != nil {
 		t.Fatalf("first Validate: %v", err)
 	}
 
-	// Second use fails.
 	_, err := v.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token)
 	if !errors.Is(err, tokenstore.ErrTokenInvalid) {
 		t.Fatalf("second Validate: got %v, want ErrTokenInvalid", err)
@@ -124,7 +151,7 @@ func TestOneTimeToken(t *testing.T) {
 }
 
 func TestTags(t *testing.T) {
-	v := newValidator(t)
+	v, _ := newValidator(t)
 	ctx := context.Background()
 
 	tags := map[string]string{"user": "alice", "session": "abc123"}
@@ -135,7 +162,6 @@ func TestTags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Find by tag subset.
 	rows, err := v.FindByTags(ctx, map[string]string{"user": "alice"})
 	if err != nil {
 		t.Fatalf("FindByTags: %v", err)
@@ -144,7 +170,6 @@ func TestTags(t *testing.T) {
 		t.Fatal("FindByTags: expected at least 1 row")
 	}
 
-	// Revoke by tags.
 	n, err := v.RevokeByTags(ctx, map[string]string{"session": "abc123"})
 	if err != nil {
 		t.Fatalf("RevokeByTags: %v", err)
@@ -154,52 +179,72 @@ func TestTags(t *testing.T) {
 	}
 }
 
+func TestNewFromPool(t *testing.T) {
+	connStr := setupPostgres(t)
+	ctx := context.Background()
+
+	// First run migrations using New.
+	v1, err := pgvalidator.New(ctx, connStr, pgvalidator.WithMigrations())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	v1.Close()
+
+	// Now use NewFromPool with an existing pool.
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+
+	v2, err := pgvalidator.NewFromPool(pool, "", /* no migrations needed */)
+	if err != nil {
+		t.Fatalf("NewFromPool: %v", err)
+	}
+
+	tok, err := v2.Issue(ctx, tokenstore.IssueRequest{
+		Method: "GET", Bucket: "b", Key: "k", Expires: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	if _, err := v2.Validate(ctx, "GET", "b", "k", tok.ExpiresAt, tok.Token); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
 // startE2EServer creates a LocalStore backed by the Postgres TokenValidator,
-// wires up the HTTP server, and returns the test server + HTTP client.
-func startE2EServer(t *testing.T) (*httptest.Server, *http.Client) {
+// wires up the HTTP file handler, and returns the test server + HTTP client.
+func startE2EServer(t *testing.T) (*httptest.Server, *http.Client, *pgvalidator.Validator) {
 	t.Helper()
-	v := newValidator(t)
+	v, _ := newValidator(t)
 
 	dir := t.TempDir()
 
-	// Create a mux first with a placeholder, then swap after we know the URL.
 	mux := http.NewServeMux()
 	ts := httptest.NewServer(mux)
 
-	cfg := objectstore.Config{
-		Backend:        "file",
-		BasePath:       dir,
-		BaseURL:        ts.URL,
-		TokenValidator: v,
-	}
-	handler, _, err := objectstore.New(cfg)
+	ls, err := objectstore.NewLocalStore(dir, ts.URL, v)
 	if err != nil {
 		ts.Close()
-		t.Fatalf("objectstore.New: %v", err)
+		t.Fatalf("NewLocalStore: %v", err)
 	}
-	mux.Handle("/", handler)
+
+	mux.Handle("/files/", objectstore.NewFileHandler(ls, v))
 	t.Cleanup(ts.Close)
 
-	return ts, ts.Client()
+	return ts, ts.Client(), v
 }
 
 func TestE2E_UploadDownload_TextFile(t *testing.T) {
-	ts, client := startE2EServer(t)
+	ts, client, v := startE2EServer(t)
 	ctx := context.Background()
 
-	v := newValidator(t)
 	const bucket = "e2e-text"
 	const key = "hello.txt"
 	const body = "Hello from the Postgres token validator e2e test!"
 
-	// Ensure bucket via direct store call (presigned PUT needs the dir).
-	store, err := objectstore.NewLocalStore(t.TempDir(), ts.URL, v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = store // we'll use the HTTP API instead
-
-	// Issue a PUT token.
 	putTok, err := v.Issue(ctx, tokenstore.IssueRequest{
 		Method:  "PUT",
 		Bucket:  bucket,
@@ -211,7 +256,6 @@ func TestE2E_UploadDownload_TextFile(t *testing.T) {
 		t.Fatalf("Issue PUT: %v", err)
 	}
 
-	// Ensure bucket exists via presigned URL path (the file handler will create dirs).
 	putURL := ts.URL + "/files/" + bucket + "/" + key +
 		"?method=PUT&expires=" + itoa(putTok.ExpiresAt) + "&token=" + putTok.Token
 
@@ -226,7 +270,6 @@ func TestE2E_UploadDownload_TextFile(t *testing.T) {
 		t.Fatalf("PUT status = %d, want 200", resp.StatusCode)
 	}
 
-	// Issue a GET token.
 	getTok, err := v.Issue(ctx, tokenstore.IssueRequest{
 		Method:  "GET",
 		Bucket:  bucket,
@@ -257,14 +300,12 @@ func TestE2E_UploadDownload_TextFile(t *testing.T) {
 }
 
 func TestE2E_UploadDownload_BinaryFile(t *testing.T) {
-	ts, client := startE2EServer(t)
+	ts, client, v := startE2EServer(t)
 	ctx := context.Background()
 
-	v := newValidator(t)
 	const bucket = "e2e-binary"
 	const key = "random.bin"
 
-	// Generate 1 MB of random binary data.
 	binaryData := make([]byte, 1<<20)
 	if _, err := rand.Read(binaryData); err != nil {
 		t.Fatal(err)
@@ -311,14 +352,12 @@ func TestE2E_UploadDownload_BinaryFile(t *testing.T) {
 }
 
 func TestE2E_UploadDownload_NestedPath(t *testing.T) {
-	ts, client := startE2EServer(t)
+	ts, client, v := startE2EServer(t)
 	ctx := context.Background()
 
-	v := newValidator(t)
 	const bucket = "e2e-nested"
 	const key = "documents/reports/2026/q1-summary.pdf"
 
-	// Simulate a small PDF-like file (just binary with PDF magic bytes).
 	pdfContent := append([]byte("%PDF-1.7\n"), make([]byte, 4096)...)
 
 	putTok, _ := v.Issue(ctx, tokenstore.IssueRequest{
@@ -362,10 +401,9 @@ func TestE2E_UploadDownload_NestedPath(t *testing.T) {
 }
 
 func TestE2E_OneTimeToken_Upload(t *testing.T) {
-	ts, client := startE2EServer(t)
+	ts, client, v := startE2EServer(t)
 	ctx := context.Background()
 
-	v := newValidator(t)
 	const bucket = "e2e-onetime"
 	const key = "single-use.txt"
 
@@ -376,7 +414,6 @@ func TestE2E_OneTimeToken_Upload(t *testing.T) {
 	putURL := ts.URL + "/files/" + bucket + "/" + key +
 		"?method=PUT&expires=" + itoa(putTok.ExpiresAt) + "&token=" + putTok.Token
 
-	// First upload succeeds.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPut, putURL, bytes.NewReader([]byte("first")))
 	resp, err := client.Do(req)
 	if err != nil {
@@ -387,7 +424,6 @@ func TestE2E_OneTimeToken_Upload(t *testing.T) {
 		t.Fatalf("first PUT = %d, want 200", resp.StatusCode)
 	}
 
-	// Second upload with same token fails (one-time).
 	req2, _ := http.NewRequestWithContext(ctx, http.MethodPut, putURL, bytes.NewReader([]byte("second")))
 	resp2, err := client.Do(req2)
 	if err != nil {
@@ -400,14 +436,12 @@ func TestE2E_OneTimeToken_Upload(t *testing.T) {
 }
 
 func TestE2E_RevokedToken_Download(t *testing.T) {
-	ts, client := startE2EServer(t)
+	ts, client, v := startE2EServer(t)
 	ctx := context.Background()
 
-	v := newValidator(t)
 	const bucket = "e2e-revoke"
 	const key = "revokeme.txt"
 
-	// Upload a file first.
 	putTok, _ := v.Issue(ctx, tokenstore.IssueRequest{
 		Method: "PUT", Bucket: bucket, Key: key, Expires: 5 * time.Minute,
 	})
@@ -417,7 +451,6 @@ func TestE2E_RevokedToken_Download(t *testing.T) {
 	resp, _ := client.Do(req)
 	resp.Body.Close()
 
-	// Issue GET token, then revoke it before use.
 	getTok, _ := v.Issue(ctx, tokenstore.IssueRequest{
 		Method: "GET", Bucket: bucket, Key: key, Expires: 5 * time.Minute,
 	})

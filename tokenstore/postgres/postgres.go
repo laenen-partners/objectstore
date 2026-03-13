@@ -58,7 +58,7 @@ type Validator struct {
 	queries *pgstore.Queries
 }
 
-// New creates a Postgres-backed TokenValidator.
+// New creates a Postgres-backed TokenValidator that owns its own connection pool.
 // Apply WithMigrations() to run embedded schema migrations on startup.
 func New(ctx context.Context, databaseURL string, opts ...Option) (*Validator, error) {
 	cfg := &options{
@@ -82,6 +82,29 @@ func New(ctx context.Context, databaseURL string, opts ...Option) (*Validator, e
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("postgres: ping: %w", err)
+	}
+
+	return &Validator{
+		pool:    pool,
+		queries: pgstore.New(pool),
+	}, nil
+}
+
+// NewFromPool creates a Postgres-backed TokenValidator using an existing pgx pool.
+// The caller retains ownership of the pool and is responsible for closing it.
+// databaseURL is only required when WithMigrations is used (dbmate needs it); pass "" otherwise.
+func NewFromPool(pool *pgxpool.Pool, databaseURL string, opts ...Option) (*Validator, error) {
+	cfg := &options{
+		migrationsTable: "objectstore_schema_migrations",
+	}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	if cfg.migrate {
+		if err := runMigrations(databaseURL, cfg.migrationsTable); err != nil {
+			return nil, fmt.Errorf("postgres: run migrations: %w", err)
+		}
 	}
 
 	return &Validator{

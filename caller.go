@@ -20,6 +20,7 @@ func CallerFromContext(ctx context.Context) Caller {
 	return c
 }
 
-func withCaller(ctx context.Context, c Caller) context.Context {
+// WithCaller returns a new context with the given Caller stored in it.
+func WithCaller(ctx context.Context, c Caller) context.Context {
 	return context.WithValue(ctx, callerKey, c)
 }
