@@ -197,7 +197,7 @@ func TestNewFromPool(t *testing.T) {
 	}
 	defer pool.Close()
 
-	v2, err := pgvalidator.NewFromPool(pool, "", /* no migrations needed */)
+	v2, err := pgvalidator.NewFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("NewFromPool: %v", err)
 	}

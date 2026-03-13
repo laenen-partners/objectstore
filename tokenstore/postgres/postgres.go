@@ -9,18 +9,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"net/url"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/laenen-partners/migrate"
 	"github.com/laenen-partners/objectstore/tokenstore"
 	"github.com/laenen-partners/objectstore/tokenstore/postgres/pgstore"
-
-	"github.com/amacneil/dbmate/v2/pkg/dbmate"
-	_ "github.com/amacneil/dbmate/v2/pkg/driver/postgres"
 )
 
 //go:embed migrations/*.sql
@@ -30,24 +28,13 @@ var migrations embed.FS
 type Option func(*options)
 
 type options struct {
-	migrate        bool
-	migrationsTable string
+	migrate bool
 }
 
 // WithMigrations enables automatic schema migration on startup.
-// The migration table defaults to "objectstore_schema_migrations".
 func WithMigrations() Option {
 	return func(o *options) {
 		o.migrate = true
-	}
-}
-
-// WithMigrationsTable overrides the migration tracking table name.
-// Implies WithMigrations().
-func WithMigrationsTable(table string) Option {
-	return func(o *options) {
-		o.migrate = true
-		o.migrationsTable = table
 	}
 }
 
@@ -61,17 +48,9 @@ type Validator struct {
 // New creates a Postgres-backed TokenValidator that owns its own connection pool.
 // Apply WithMigrations() to run embedded schema migrations on startup.
 func New(ctx context.Context, databaseURL string, opts ...Option) (*Validator, error) {
-	cfg := &options{
-		migrationsTable: "objectstore_schema_migrations",
-	}
+	cfg := &options{}
 	for _, o := range opts {
 		o(cfg)
-	}
-
-	if cfg.migrate {
-		if err := runMigrations(databaseURL, cfg.migrationsTable); err != nil {
-			return nil, fmt.Errorf("postgres: run migrations: %w", err)
-		}
 	}
 
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -84,6 +63,13 @@ func New(ctx context.Context, databaseURL string, opts ...Option) (*Validator, e
 		return nil, fmt.Errorf("postgres: ping: %w", err)
 	}
 
+	if cfg.migrate {
+		if err := runMigrations(ctx, pool); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("postgres: run migrations: %w", err)
+		}
+	}
+
 	return &Validator{
 		pool:    pool,
 		queries: pgstore.New(pool),
@@ -92,17 +78,14 @@ func New(ctx context.Context, databaseURL string, opts ...Option) (*Validator, e
 
 // NewFromPool creates a Postgres-backed TokenValidator using an existing pgx pool.
 // The caller retains ownership of the pool and is responsible for closing it.
-// databaseURL is only required when WithMigrations is used (dbmate needs it); pass "" otherwise.
-func NewFromPool(pool *pgxpool.Pool, databaseURL string, opts ...Option) (*Validator, error) {
-	cfg := &options{
-		migrationsTable: "objectstore_schema_migrations",
-	}
+func NewFromPool(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Validator, error) {
+	cfg := &options{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
 	if cfg.migrate {
-		if err := runMigrations(databaseURL, cfg.migrationsTable); err != nil {
+		if err := runMigrations(ctx, pool); err != nil {
 			return nil, fmt.Errorf("postgres: run migrations: %w", err)
 		}
 	}
@@ -262,17 +245,10 @@ func (v *Validator) StartCleanup(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-func runMigrations(databaseURL, migrationsTable string) error {
-	u, err := url.Parse(databaseURL)
+func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
-		return fmt.Errorf("parse database URL: %w", err)
+		return fmt.Errorf("sub migrations fs: %w", err)
 	}
-
-	db := dbmate.New(u)
-	db.FS = migrations
-	db.MigrationsDir = []string{"migrations"}
-	db.MigrationsTableName = migrationsTable
-	db.AutoDumpSchema = false
-
-	return db.Migrate()
+	return migrate.Up(ctx, pool, sub, "objectstore")
 }

@@ -38,7 +38,6 @@ type options struct {
 	// Token store
 	pgxPool     *pgxpool.Pool
 	autoMigrate bool
-	pgURL       string // only needed for dbmate migrations
 
 	// Behavior
 	cleanupInterval time.Duration
@@ -77,19 +76,9 @@ func WithPgxPool(pool *pgxpool.Pool) Option {
 }
 
 // WithAutoMigrate enables automatic database schema migration on startup.
-// Requires a PostgreSQL connection string to be provided (used by dbmate).
-// Use WithPostgresURL to set the connection string.
 func WithAutoMigrate() Option {
 	return func(o *options) {
 		o.autoMigrate = true
-	}
-}
-
-// WithPostgresURL sets the Postgres connection string used for database migrations.
-// Only needed when WithAutoMigrate is used.
-func WithPostgresURL(url string) Option {
-	return func(o *options) {
-		o.pgURL = url
 	}
 }
 
@@ -110,7 +99,7 @@ func WithMaxExpires(d time.Duration) Option {
 }
 
 // New creates an ObjectStore with the given options.
-func New(opts ...Option) (*ObjectStore, error) {
+func New(ctx context.Context, opts ...Option) (*ObjectStore, error) {
 	cfg := &options{
 		cleanupInterval: 1 * time.Hour,
 	}
@@ -128,13 +117,10 @@ func New(opts ...Option) (*ObjectStore, error) {
 	if cfg.pgxPool != nil {
 		var pgOpts []pgvalidator.Option
 		if cfg.autoMigrate {
-			if cfg.pgURL == "" {
-				return nil, errors.New("objectstore: WithPostgresURL is required when WithAutoMigrate is used")
-			}
 			pgOpts = append(pgOpts, pgvalidator.WithMigrations())
 		}
 		var err error
-		pgv, err = pgvalidator.NewFromPool(cfg.pgxPool, cfg.pgURL, pgOpts...)
+		pgv, err = pgvalidator.NewFromPool(ctx, cfg.pgxPool, pgOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("objectstore: create token validator: %w", err)
 		}

@@ -7,7 +7,7 @@ Go library for object storage with presigned URL support. Plug in a local filesy
 - **Two storage backends** — local filesystem or S3-compatible (AWS, MinIO)
 - **Presigned URLs** — secure, time-limited upload and download links
 - **Postgres token validation** — revocable, one-time tokens with tags and upload constraints
-- **Automatic migrations** — Postgres schema managed via embedded [dbmate](https://github.com/amacneil/dbmate) migrations
+- **Automatic migrations** — Postgres schema managed via embedded [migrate](https://github.com/laenen-partners/migrate) migrations
 - **Cursor-based pagination** — for listing objects by prefix
 - **Content-Disposition** — download filename support via presigned GET URLs
 - **Path traversal protection** — validated filesystem paths
@@ -34,11 +34,10 @@ pool, _ := pgxpool.New(ctx, "postgres://user:pass@localhost/objectstore")
 defer pool.Close()
 
 // Create an ObjectStore with options
-store, _ := objectstore.New(
+store, _ := objectstore.New(ctx,
     objectstore.WithLocalBackend("/tmp/objects", "http://localhost:3000"),
     objectstore.WithPgxPool(pool),
     objectstore.WithAutoMigrate(),
-    objectstore.WithPostgresURL("postgres://user:pass@localhost/objectstore"),
 )
 defer store.Close()
 
@@ -87,7 +86,7 @@ defer tokens.Close()
 store, _ := objectstore.NewLocalStore("/tmp/objects", "http://localhost:3000", tokens)
 
 // Or use NewFromPool if you have an existing pgx pool
-tokens, _ := pgvalidator.NewFromPool(pool, "")
+tokens, _ := pgvalidator.NewFromPool(ctx, pool)
 ```
 
 ## Options
@@ -98,7 +97,6 @@ tokens, _ := pgvalidator.NewFromPool(pool, "")
 | `WithS3Backend(region, endpoint)` | Use AWS S3 or MinIO backend |
 | `WithPgxPool(pool)` | Set the pgx connection pool for token validation |
 | `WithAutoMigrate()` | Run database migrations on startup |
-| `WithPostgresURL(url)` | Postgres URL for migrations (required with `WithAutoMigrate`) |
 | `WithCleanupInterval(d)` | Expired token cleanup interval (default: 1h, 0 = disabled) |
 | `WithMaxExpires(d)` | Cap presigned URL lifetime |
 
@@ -136,7 +134,7 @@ tokenstore/
   tokenstore.go        TokenValidator interface
   postgres/
     postgres.go        Postgres-backed validator
-    migrations/        Embedded dbmate migrations
+    migrations/        Embedded SQL migrations
     pgstore/           sqlc-generated code (do not edit)
     queries.sql        sqlc query definitions
     sqlc.yaml          sqlc configuration

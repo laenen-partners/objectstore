@@ -26,7 +26,7 @@ tokenstore/
   postgres/
     postgres.go                    Postgres-backed validator (New, NewFromPool, WithMigrations)
     postgres_test.go               Integration tests (testcontainers)
-    migrations/                    dbmate migrations
+    migrations/                    Embedded SQL migrations (laenen-partners/migrate)
     queries.sql                    sqlc query definitions
     sqlc.yaml
     pgstore/                       sqlc-generated code (do not edit)
@@ -45,7 +45,7 @@ task tidy            # go mod tidy
 
 ## ObjectStore-specific details
 
-- **Functional options:** `objectstore.New(WithLocalBackend(...), WithPgxPool(pool), WithAutoMigrate(), ...)`
+- **Functional options:** `objectstore.New(ctx, WithLocalBackend(...), WithPgxPool(pool), WithAutoMigrate(), ...)`
 - **Presigned URLs:** File handler (`/files/`) uses token-authenticated URLs for direct upload/download. Tokens self-authenticate — no API key needed.
 - **Caller identity:** `WithCaller(ctx, Caller{...})` / `CallerFromContext(ctx)` for propagating identity.
 - **One-time tokens:** Atomic `UPDATE ... WHERE used = FALSE RETURNING id` prevents race conditions.
