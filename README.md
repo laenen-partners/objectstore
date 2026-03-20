@@ -13,6 +13,92 @@ Go library for object storage with presigned URL support. Plug in a local filesy
 - **Path traversal protection** — validated filesystem paths
 - **Testcontainers** — integration tests use [testcontainers-go](https://golang.testcontainers.org/) for Postgres
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Your Application                             │
+│                                                                     │
+│  store, _ := objectstore.New(ctx,                                   │
+│      WithLocalBackend(path, url),  // or WithS3Backend(region, ep)  │
+│      WithPgxPool(pool),                                             │
+│      WithAutoMigrate(),                                             │
+│  )                                                                  │
+└──────────┬──────────────────┬───────────────────────────────────────┘
+           │                  │
+     Direct I/O          Presigned URLs
+     (PutObject,         (PresignPut,
+      GetObject, …)       PresignGet)
+           │                  │
+           ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ObjectStore                                 │
+│                                                                     │
+│  ┌───────────────────────┐      ┌────────────────────────────────┐  │
+│  │     Store interface    │      │     TokenValidator interface    │  │
+│  │                        │      │                                │  │
+│  │  ┌──────────────────┐  │      │  Issue()  → token + expiry     │  │
+│  │  │   LocalStore     │  │      │  Validate() → claims           │  │
+│  │  │   (filesystem)   │  │      │  Revoke()                      │  │
+│  │  └──────────────────┘  │      │                                │  │
+│  │  ┌──────────────────┐  │      │  ┌────────────────────────┐    │  │
+│  │  │   S3Store        │  │      │  │  Postgres Validator    │    │  │
+│  │  │   (AWS/MinIO)    │  │      │  │  (pgx + migrations)    │    │  │
+│  │  └──────────────────┘  │      │  └────────────────────────┘    │  │
+│  └───────────────────────┘      └────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+           │                                       │
+           ▼                                       ▼
+   ┌──────────────┐                      ┌──────────────────┐
+   │  Filesystem   │                      │    PostgreSQL     │
+   │  or S3 bucket │                      │ objectstore_tokens│
+   └──────────────┘                      └──────────────────┘
+```
+
+### Presigned URL flow (local backend)
+
+```
+  Client                     Your Server                  ObjectStore
+    │                            │                            │
+    │  1. "I need an upload URL" │                            │
+    │ ──────────────────────────>│                            │
+    │                            │  2. store.PresignPut(…)    │
+    │                            │ ──────────────────────────>│
+    │                            │                            │──┐ Issue token
+    │                            │                            │  │ (Postgres)
+    │                            │    signed URL              │<─┘
+    │                            │ <──────────────────────────│
+    │    URL with token          │                            │
+    │ <──────────────────────────│                            │
+    │                            │                            │
+    │  3. PUT /files/bucket/key?token=…&expires=…&method=PUT  │
+    │ ──────────────────────────────────────────────────────>  │
+    │                            │                   FileHandler
+    │                            │              ┌─────────────│
+    │                            │              │ 4. Validate │
+    │                            │              │    token    │
+    │                            │              │    (Postgres)
+    │                            │              │ 5. Enforce  │
+    │                            │              │    MaxSize, │
+    │                            │              │    AllowedTypes
+    │                            │              │ 6. Write to │
+    │                            │              │    disk     │
+    │                            │              └─────────────│
+    │           200 OK           │                            │
+    │ <──────────────────────────────────────────────────────  │
+```
+
+Mount the `FileHandler` to serve presigned URLs:
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/files/", store.FileHandler())
+http.ListenAndServe(":3000", mux)
+```
+
+For the **S3 backend**, presigned URLs point directly to S3 — no `FileHandler` needed.
+The client uploads/downloads straight to the S3 endpoint.
+
 ## Install
 
 ```sh
